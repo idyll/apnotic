@@ -6,7 +6,7 @@ module Apnotic
   class Notification
     attr_reader :token
     attr_accessor :alert, :badge, :sound, :content_available, :category, :custom_payload, :url_args, :mutable_content
-    attr_accessor :apns_id, :expiration, :priority, :topic, :apns_collapse_id
+    attr_accessor :apns_id, :expiration, :priority, :topic, :apns_collapse_id, :push_magic
 
     def initialize(token)
       @token   = token
@@ -30,9 +30,13 @@ module Apnotic
       aps.merge!('url-args' => url_args) if url_args
       aps.merge!('mutable-content' => mutable_content) if mutable_content
 
-      n = { aps: aps }
-      n.merge!(custom_payload) if custom_payload
-      n
+      if push_magic
+        { mdm: push_magic }
+      else
+        n = { aps: aps }
+        n.merge!(custom_payload) if custom_payload
+        n
+      end
     end
   end
 end
