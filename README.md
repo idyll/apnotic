@@ -92,9 +92,28 @@ connection.join
 connection.close
 ```
 
+#### Token-based authentication
+Token-based authentication is supported. There are several advantages with token-based auth:
+
+- There is no need to renew push certificates annually.
+- A single key can be used for every app in your developer account.
+
+First, you will need a [token signing key](http://help.apple.com/xcode/mac/current/#/dev54d690a66?sub=dev1eb5dfe65) from your Apple developer account.
+
+Then configure your connection for `:token` authentication:
+
+```ruby
+require 'apnotic'
+connection = Apnotic::Connection.new(
+  auth_method: :token,
+  cert_path: "key.p8",
+  key_id: "p8_key_id",
+  team_id: "apple_team_id"
+)
+```
 
 ### With Sidekiq / Rescue / ...
-> In case that errors are encountered, Apnotic will repair the underlying connection but will not retry the requests that have failed. For this reason, it is recommended to use a queue engine that will retry unsuccessful pushes.
+> In case that errors are encountered, Apnotic will raise the error and repair the underlying connection, but it will not retry the requests that have failed. This is by design,  so that the job manager (Sidekiq, Resque,...) can retry the job that failed. For this reason, it is recommended to use a queue engine that will retry unsuccessful pushes.
 
 A practical usage of a Sidekiq / Rescue worker probably has to:
 
@@ -135,7 +154,7 @@ class MyWorker
 end
 ```
 
-> The official [APNs Provider API documentation](https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/APNsProviderAPI.html) explains how to interpret the responses given by the APNS.
+> The official [APNs Provider API documentation](https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/CommunicatingwithAPNs.html) explains how to interpret the responses given by the APNS.
 
 You may also consider using async pushes instead in a Sidekiq / Rescue worker.
 
@@ -151,10 +170,16 @@ Apnotic::Connection.new(options)
 
 | Option | Description
 |-----|-----
-| :cert_path | Required. The path to a valid APNS push certificate in .pem or .p12 format, or any object that responds to `:read`.
+| :cert_path | Required. The path to a valid APNS push certificate in `.pem` or `.p12` format, or any object that responds to `:read`.
 | :cert_pass | Optional. The certificate's password.
 | :url | Optional. Defaults to https://api.push.apple.com:443.
 | :connect_timeout | Optional. Expressed in seconds, defaults to 30.
+
+Note that since `:cert_path` can be any object that responds to `:read`, it is possible to pass in a certificate string directly by wrapping it up in a `StringIO` object:
+
+```ruby
+Apnotic::Connection.new(cert_path: StringIO.new("pem cert as string"))
+```
 
 It is also possible to create a connection that points to the Apple Development servers by calling instead:
 
@@ -166,13 +191,23 @@ Apnotic::Connection.development(options)
 
 #### Methods
 
+ * **cert_path** → **`string`**
+
+ Returns the path to the certificate.
+
+ * **on(event, &block)**
+
+Allows to set a callback for the connection. The only available event is `:error`, which allows to set a callback when an error is raised at socket level, hence in the underlying socket thread.
+
+```ruby
+connection.on(:error) { |exception| puts "Exception has been raised: #{exception}" }
+```
+
+> If the `:error` callback is not set, the underlying socket thread may raise an error in the main thread at unexpected execution times.
+
  * **url** → **`URL`**
 
  Returns the URL of the APNS endpoint.
-
- * **cert_path** → **`string`**
-
- Returns the path to the certificate
 
 ##### Blocking calls
 
@@ -210,6 +245,13 @@ APNOTIC_POOL = Apnotic::ConnectionPool.new({
 }, size: 5)
 ```
 
+It is also possible to create a connection pool that points to the Apple Development servers by calling instead:
+
+```ruby
+Apnotic::ConnectionPool.development(connection_options, connection_pool_options)
+```
+
+
 ### `Apnotic::Notification`
 To create a notification for a specific device token:
 
@@ -222,13 +264,13 @@ These are all Accessor attributes.
 
 | Method | Documentation
 |-----|-----
-| `alert` | Refer to the official Apple documentation of [The Notification Payload](https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/TheNotificationPayload.html) for details.
+| `alert` | Refer to the official Apple documentation of [The Payload Key Reference](https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/PayloadKeyReference.html) for details.
 | `badge` | "
 | `sound` | "
 | `content_available` | "
 | `category` | "
 | `custom_payload` | "
-| `apns_id` | Refer to the [APNs Provider API](https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/APNsProviderAPI.html) for details.
+| `apns_id` | Refer to [Communicating with APNs](https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/CommunicatingwithAPNs.html) for details.
 | `expiration` | "
 | `priority` | "
 | `topic` | "
@@ -259,32 +301,37 @@ notification.alert    = {
 notification.url_args = ["boarding", "A998"]
 ```
 
+
 ### `Apnotic::Response`
 The response to a call to `connection.push`.
 
 #### Methods
 
+ * **body** → **`hash` or `string`**
+
+ Returns the body of the response in Hash format if a valid JSON was returned, otherwise just the RAW body.
+
+  * **headers** → **`hash`**
+
+ Returns a Hash containing the Headers of the response.
+
  * **ok?** → **`boolean`**
 
  Returns if the push was successful.
 
- * **headers** → **`hash`**
-
- Returns a Hash containing the Headers of the response.
-
  * **status** → **`string`**
 
- Returns the status code.
-
- * **body** → **`hash` or `string`**
-
- Returns the body of the response in Hash format if a valid JSON was returned, otherwise just the RAW body.
+Returns the status code.
 
 
 ### `Apnotic::Push`
 The push object to be sent in an async call.
 
 #### Methods
+
+ * **http2_request**  → **`NetHttp2::Request`**
+
+ Returns the HTTP/2 request of the push.
 
  * **on(event, &block)**
 
@@ -297,12 +344,6 @@ The push object to be sent in an async call.
  ```ruby
  push.on(:response) { |response| p response.headers }
  ```
-
- * **http2_request**  → **`NetHttp2::Request`**
- 
- Returns the HTTP/2 request of the push.
-
-
 
 ## Getting Your APNs Certificate
 
@@ -319,6 +360,14 @@ Optionally, you may covert the p12 file to a pem file (this step is optional bec
 $ openssl pkcs12 -in cert.p12 -out apple_push_notification_production.pem -nodes -clcerts
 ```
 
+
+## Thread-Safety
+Apnotic is thread-safe. However, some caution is imperative:
+
+  * The async callbacks will be executed in a different thread, so ensure that your code in the callbacks is thread-safe.
+  * Errors in the underlying socket loop thread will be raised in the main thread at unexpected execution times, unless you specify the `:error` callback on the Connection. If you're using Apnotic with a job manager you should be fine by not specifying this callback.
+
+
 ## Contributing
 So you want to contribute? That's great! Please follow the guidelines below. It will make it easier to get merged in.
 
@@ -326,7 +375,7 @@ Before implementing a new feature, please submit a ticket to discuss what you in
 
 Do not commit to master in your fork. Provide a clean branch without merge commits. Every pull request should have its own topic branch. In this way, every additional adjustments to the original pull request might be done easily, and squashed with `git rebase -i`. The updated branch will be visible in the same pull request, so there will be no need to open new pull requests when there are changes to be applied.
 
-Ensure to include proper testing. To run tests you simply have to be in the project's root directory and run:
+Ensure that proper testing is included. To run tests you simply have to be in the project's root directory and run:
 
 ```bash
 $ rake
